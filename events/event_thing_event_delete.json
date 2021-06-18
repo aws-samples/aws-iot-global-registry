@@ -1,0 +1,13 @@
+{
+  "eventType": "THING_EVENT",
+  "eventId": "140f3d757971bf2af4667d00abb126de",
+  "timestamp": 1621707974152,
+  "operation": "DELETED",
+  "accountId": "614797420359",
+   "thingId": "b604f69c-aa9a-4d4a-829e-c480e958a0b5",
+   "thingName": "MyThing",
+  "versionNumber": 1,
+  "thingTypeName": null,
+  "billinGroupName": null,
+  "attributes": {}
+}

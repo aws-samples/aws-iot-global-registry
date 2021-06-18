@@ -1,0 +1,15 @@
+{
+  "eventType": "THING_EVENT",
+  "eventId": "0b9601d656957afd75134693c7e9de88",
+  "timestamp": 1621708047618,
+  "operation": "UPDATED",
+  "accountId": "614797420359",
+    "thingId": "b604f69c-aa9a-4d4a-829e-c480e958a0b5",
+    "thingName": "MyThing",
+  "versionNumber": 2,
+  "thingTypeName": null,
+  "billinGroupName": null,
+  "attributes": {
+    "a": "c"
+  }
+}

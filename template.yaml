@@ -1,0 +1,198 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Sample implementation for an AWS IoT registry multi-region read-only replication in DynamoDB global table
+
+# ██████   █████  ██████   █████  ███    ███ ███████ ████████ ███████ ██████  ███████ 
+# ██   ██ ██   ██ ██   ██ ██   ██ ████  ████ ██         ██    ██      ██   ██ ██      
+# ██████  ███████ ██████  ███████ ██ ████ ██ █████      ██    █████   ██████  ███████ 
+# ██      ██   ██ ██   ██ ██   ██ ██  ██  ██ ██         ██    ██      ██   ██      ██ 
+# ██      ██   ██ ██   ██ ██   ██ ██      ██ ███████    ██    ███████ ██   ██ ███████ 
+
+
+Parameters:
+  CreateGlobalTable:
+    Description: Set to 'true' to create DynamoDB global table in this region. Set to 'false' to assume DynamoDB global table already exists.
+    Default: true
+    Type: String
+    AllowedValues:
+    - true
+    - false
+    ConstraintDescription: must specify true or false
+
+  SecondaryRegionName:
+    Description: Select a name of an AWS region to add as a replice to a global DynamoDB table (e.g. 'eu-west-1')
+    Type: String
+    
+    
+  GlobalIoTDeviceRegistyTableName:
+    Description: Name of global table
+    Default: GlobalIoTDeviceRegistyTable
+    Type: String
+    
+Conditions:
+  IsCreateGlobalTable:
+    Fn::Equals:
+    - Ref: CreateGlobalTable
+    - true
+    
+# ██████  ███████ ███████  ██████  ██    ██ ██████   ██████ ███████ ███████ 
+# ██   ██ ██      ██      ██    ██ ██    ██ ██   ██ ██      ██      ██      
+# ██████  █████   ███████ ██    ██ ██    ██ ██████  ██      █████   ███████ 
+# ██   ██ ██           ██ ██    ██ ██    ██ ██   ██ ██      ██           ██ 
+# ██   ██ ███████ ███████  ██████   ██████  ██   ██  ██████ ███████ ███████ 
+  
+Resources:
+  # This rule will write subscribe to registry events topic (https://docs.aws.amazon.com/iot/latest/developerguide/registry-events.html).
+  # - aws/events/thing/thingName/created
+  # - $aws/events/thing/thingName/updated
+  # - $aws/events/thing/thingName/deleted
+  # For each of the events, a Lambda function will be invoked, which will update the global DynamoDB table accordingly
+  # It will republish output to "debug" and errors to "error" topics
+  
+  ProcessRegistryEventsFunction:
+    Type: "AWS::IoT::TopicRule"
+    Properties:
+      RuleName: !Sub "${AWS::StackName}ProcessIoTRegisryEventsRule"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Sql: |
+            SELECT * FROM '$aws/events/thing/+/+'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt WriteRegistryEventToDDBFunction.Arn
+          - Republish:
+              RoleArn: !GetAtt RepublishRole.Arn
+              Topic: debug
+              Qos: 0
+
+        ErrorAction:
+          Republish:
+            RoleArn: !GetAtt RepublishRole.Arn
+            Topic: error
+            Qos: 0
+
+  RepublishRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - iot.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: iot:Publish
+                Resource:
+                  !Join [
+                    "",
+                    [
+                      "arn:aws:iot:",
+                      !Ref "AWS::Region",
+                      ":",
+                      !Ref "AWS::AccountId",
+                      ":topic/",
+                      "debug",
+                    ],
+                  ]
+              - Effect: Allow
+                Action: iot:Publish
+                Resource:
+                  !Join [
+                    "",
+                    [
+                      "arn:aws:iot:",
+                      !Ref "AWS::Region",
+                      ":",
+                      !Ref "AWS::AccountId",
+                      ":topic/",
+                      "error",
+                    ],
+                  ]
+
+ 
+  WriteRegistryEventToDDBFunction:
+    Type: AWS::Serverless::Function
+    Name: !Sub "${AWS::StackName}-WriteRegistryEventToDDBFunction"
+    Properties:
+      Tracing: Active
+      CodeUri: src
+      Handler: app.lambda_handler
+      Runtime: python3.8
+      Timeout: 10
+      Environment:
+        Variables:
+          DDB_TABLE_NAME: !Ref GlobalIoTDeviceRegistyTableName
+          LOG_LEVEL: INFO
+          POWERTOOLS_SERVICE_NAME: example
+      Policies:
+        - Statement:
+            - Sid: Policy1
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+              Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${GlobalIoTDeviceRegistyTableName}"
+
+  WriteRegistryEventToDDBFunctionInvocationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt WriteRegistryEventToDDBFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: iot.amazonaws.com
+
+  MyGlobalIoTDeviceRegistyTable:
+    Condition: IsCreateGlobalTable
+    Type: AWS::DynamoDB::GlobalTable
+    Properties:
+      TableName: !Ref GlobalIoTDeviceRegistyTableName
+      BillingMode: PAY_PER_REQUEST
+      
+      # This is obligatory parameter for a global table, see https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-dynamodb-globaltable.html#cfn-dynamodb-globaltable-streamspecification
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE 
+      AttributeDefinitions:
+        -
+          AttributeName: "ThingName"
+          AttributeType: "S"
+        -
+          AttributeName: "AWSRegion"
+          AttributeType: "S"
+      Replicas:
+        - Region: !Ref AWS::Region
+        - Region: !Ref SecondaryRegionName
+
+      KeySchema:
+        -
+          AttributeName: "ThingName"
+          KeyType: "HASH"
+        -
+          AttributeName: "AWSRegion"
+          KeyType: "RANGE"
+
+
